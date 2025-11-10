@@ -1,0 +1,55 @@
+Aquí tienes un resumen técnico listo para “commit”.
+
+# MarkerFollower – Descripción y funcionamiento
+
+**Objetivo:** seguir una ruta dibujada (MarkerArray LINE_STRIP en `/ui/draft_markers`) ejecutándola como **girar→parar→avanzar→parar** con paradas duras cronometradas y finalización robusta (sin “ping-pong” al final).
+
+## I/O y fuentes de pose
+
+* **Sub:** `/ui/draft_markers` (MarkerArray), `/ui/exec_command` (String: `start|pause|resume|abort|replan`), `amcl_pose` si `pose_source=amcl`.
+* **Pub:** `/cmd_vel` (Twist), `/ui/exec_status` (String).
+* **Pose:** por defecto de **TF** (`base_link`→`<frame de la ruta>`); alternativa: AMCL + TF.
+
+## Parámetros clave
+
+`rate_hz`, `k_dist`, `k_yaw`, `vmax`, `wmax`, `xy_tol`, `yaw_tol_deg`, `lookahead_m`, rampas `accel_v/accel_w`, y **paradas duras** `stop_dwell_s`. Log con `log_level`.
+
+## Congelación de ruta y “replan”
+
+Al `start|resume`:
+
+1. Proyecta la pose actual al polyline y **congela** `route` desde el punto más cercano.
+2. Calcula `final_yaw` (tangente del último tramo) para orientar opcionalmente al final.
+3. En `running`, si llega otro MarkerArray, se guarda en `pending` y se aplica con `replan`.
+
+## FSM (máquina de estados)
+
+Estados de ejecución: `idle|running|paused|done|aborted`.
+Fases de control:
+
+1. **stop_before_turn** → **turn**
+2. **stop_before_go** → **go**
+
+* **Paradas duras:** al entrar en `stop_before_*` se publica **Twist=0** y se **bloquea** el cero hasta `now >= stop_until` (no depende de rampas ni `stop_eps`).
+* **turn:** sólo `w`; termina cuando `|e_yaw| ≤ yaw_tol`, luego **parada dura**.
+* **go:** sólo `v`; termina cuando `dist ≤ xy_tol`, luego **parada dura**.
+
+## Finalización robusta
+
+* **Meta:** si es el **último punto** y `dist ≤ xy_tol` **y** (si existe) `|final_yaw - th| ≤ yaw_tol` ⇒ `done`.
+* Cerca del último punto, la **referencia angular** se fija a `final_yaw` (o al propio `th`) para evitar saltos por ruido con `dx,dy≈0`.
+
+## Suavizado y seguridad
+
+* **Rampas** en `v_cmd/w_cmd` fuera de las paradas.
+* **Histeresis simple** (tolerancias de salida más laxas).
+* Si no hay TF/pose válida, publica **0**.
+
+## TUI (opcional `--tui`)
+
+Atajos: start/pause/resume/abort/replan y “live-tuning” de `vmax`, `wmax`, `yaw_tol`, `k_yaw`. Muestra pose, objetivo, fase, comandos y métricas.
+
+## Puntos ciegos / tuning
+
+* Si AMCL/TF oscila > `xy_tol`, aumentar `xy_tol` (0.06–0.08) y `stop_dwell_s` (0.20–0.30).
+* Si quieres un ángulo final **específico** distinto de la tangente, añade un parámetro `final_yaw_goal`.
